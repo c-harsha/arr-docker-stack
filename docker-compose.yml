@@ -1,0 +1,365 @@
+version: "3.9"
+########################### NETWORKS
+# Docker Compose version 3.5 or higher required to define networks this way.
+# Keys common to some of the services in basic-services.txt
+# Common environment values
+networks:
+  default:
+    driver: bridge
+  arr:
+    name: arr
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.10.0.0/24
+
+# Common keys for VPN arr Apps - Prowlarr / Flaresolverr
+x-common-keys-vpn: &common-keys-vpn
+  restart: always
+  depends_on:
+    - vpn
+  network_mode: "container:vpn"  
+  labels:
+    - "com.centurylinklabs.watchtower.enable=true"
+
+# Common keys for First Start Apps - BT & Sabnzbd
+x-common-keys-download: &common-keys-download
+  restart: always
+  depends_on:
+    - vpn
+    - prowlarr
+    - flaresolverr
+  networks:
+    - arr
+  labels:
+    - "com.centurylinklabs.watchtower.enable=true"
+
+# Keys common to some of the Sonarr & Radarr without VPN
+x-common-keys-sonarr_radarr: &common-keys-sonarr_radarr
+  networks:
+    - arr
+  depends_on:
+    - vpn
+    - prowlarr
+    - sabnzbd
+    - bt
+    - flaresolverr
+  restart: unless-stopped
+  labels:
+    - "com.centurylinklabs.watchtower.enable=true"
+
+# Keys common to some of the dependent services/apps
+x-common-keys-apps: &common-keys-apps
+  networks:
+    - arr
+  depends_on:
+    - sonarr
+    - radarr
+  restart: unless-stopped
+  labels:
+    - "com.centurylinklabs.watchtower.enable=true"
+
+# Keys common to some of the dependent services/apps
+x-common-keys-host: &common-keys-host
+  network_mode: host
+  restart: unless-stopped
+  labels:
+    - "com.centurylinklabs.watchtower.enable=true"
+
+########################### SERVICES
+services:
+  
+###### VPN ##########  
+  vpn:
+    image: walt3rl/proton-privoxy
+    container_name: vpn
+    environment:
+      - PVPN_USERNAME=$PVPN_USERNAME
+      - PVPN_PASSWORD=$PVPN_PASSWORD
+      - PVPN_TIER=0
+      - PVPN_DEBUG=0
+      - HOST_NETWORK=10.0.0.0/8
+      - DNS_SERVERS_OVERRIDE=9.9.9.9,149.112.112.112
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      #- 8889:8888/tcp #QBitTorrent
+      #- 8989:8989/tcp #Sonarr
+      - 9696:9696/tcp #Prowlarr
+      #- 7878:7878/tcp #Radarr
+      - 8191:8191/tcp #Flaresolverr
+      #- 8082:8080/tcp #SABnzbd
+      #- 8265:8265/tcp #Tdarr Webui
+      #- 8266:8266/tcp #Tdarr Server Port
+      #- 8267:8267/tcp #Tdarr Internal Node
+      #- 6767:6767/tcp #Bazarr
+      - 8888:8080 # Privoxy
+    #restart: unless-stopped
+    devices:
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    network_mode: bridge
+
+###### QBITTORRENT ######
+  bt:
+    <<: *common-keys-download
+    container_name: qbittorrent
+    image: linuxserver/qbittorrent
+    environment:
+      - PUID=$PUID
+      - PGID=$PGID
+      - UMASK=002
+      - TZ=Asia/Kolkata
+      - WEBUI_PORT=8888
+      - log_level=INFO
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - $APPDATADIR/arr/qbittorrent:/config
+      - /data/torrents:/data/torrents
+    ports:
+      - target: 8888
+        published: 8889
+        protocol: tcp
+        mode: host
+
+######## SABNZBD ########
+  sabnzbd:
+    #<<: *common-keys-vpn # See EXTENSION FIELDS at the top
+    <<: *common-keys-download
+    container_name: sabnzbd
+    image: linuxserver/sabnzbd
+    environment:
+      - PUID=$PUID
+      - PGID=$PGID
+      - TZ=Asia/Kolkata
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - $APPDATADIR/arr/sabnzdb:/config
+      - /data/usenet:/data/usenet
+    ports:
+      - target: 8080
+        published: 8082
+        protocol: tcp
+        mode: host         
+
+###### SONARR #######
+  sonarr:
+    <<: *common-keys-sonarr_radarr
+    container_name: sonarr
+    image: linuxserver/sonarr:latest
+    environment:
+      - PUID=$PUID
+      - PGID=$PGID
+      - UMASK=002
+      - TZ=Asia/Kolkata
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - $APPDATADIR/arr/sonarr:/config
+      - /data:/data
+      - $APPDATADIR/arr/sonarr/custom-services:/custom-services.d
+      - $APPDATADIR/arr/sonarr/custom-cont-init:/custom-cont-init.d
+    ports:
+      - target: 8989
+        published: 8989
+        protocol: tcp
+        mode: host
+
+
+###### RADARR ######
+  radarr:
+    <<: *common-keys-sonarr_radarr
+    container_name: radarr
+    image: linuxserver/radarr:latest
+    environment:
+      - PUID=$PUID
+      - PGID=$PGID
+      - UMASK=002
+      - TZ=Asia/Kolkata
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - $APPDATADIR/arr/radarr:/config
+      - /data:/data
+    ports:
+      - target: 7878
+        published: 7878
+        protocol: tcp
+        mode: host
+  
+###### PROWLARR ############  
+  prowlarr:
+    <<: *common-keys-vpn
+    container_name: prowlarr
+    image: linuxserver/prowlarr:latest
+    environment:
+      - PUID=$PUID
+      - PGID=$PGID
+      - UMASK=002
+      - TZ=Asia/Kolkata
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - $APPDATADIR/arr/prowlarr:/config
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+   #ports:
+      #- target: 9696
+        #published: 9696
+        #protocol: tcp
+        #mode: host
+
+###### BAZARR ############
+  bazarr:
+    <<: *common-keys-apps
+    container_name: bazarr
+    image: linuxserver/bazarr
+    ports:
+      - target: 6767
+        published: 6767
+        protocol: tcp
+        mode: host
+    environment:
+      - PUID=$PUID
+      - PGID=$PGID
+      - TZ=$TZ
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - $APPDATADIR/arr/bazarr:/config
+      - /data/media:/data/media
+      
+###### JELLYFIN ############
+  jellyfin:
+    <<: *common-keys-host
+    image: linuxserver/jellyfin
+    container_name: jellyfin
+    environment:
+      - PUID=$PUID
+      - PGID=$PGID
+      - TZ=$TZ
+      - JELLYFIN_PublishedServerUrl=$JELLYFIN_Url.$DOMAINNAME_CLOUD_SERVER # Set the autodiscovery response domain or IP address.
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - $APPDATADIR/arr/jellyfin:/config
+      - /data/media:/data/media
+    #devices:
+      # Hardware acceleration users for Raspberry Pi MMAL/OpenMAX will need to mount their /dev/vcsm and 
+      # /dev/vchiq video devices inside of the container and their system OpenMax libs by passing the 
+      # following options when running or creating the container
+      #- /dev/vcsm:/dev/vcsm
+      #- /dev/vchiq:/dev/vchiq
+      #- /dev/vcsm-cma:/dev/vcsm-cma
+      #- /dev/dri:/dev/dri
+      # Hardware acceleration users for Raspberry Pi V4L2 will need to mount their /dev/video1X devices 
+      # inside of the container by passing the following options when running or creating the container
+      # As per Linuxserver documentation
+      #- /dev/video10:/dev/video10 
+      #- /dev/video11:/dev/video11 
+      #- /dev/video12:/dev/video12
+      # These are other VAAPI by using "ls -al /dev/dri"
+      #- /dev/dri/renderD128:/dev/dri/renderD128
+      #- /dev/dri/card0:/dev/dri/card0
+      #- /dev/dri/card1:/dev/dri/card1
+      #- /dev/video-dec0:/dev/video-dec0
+      #- /dev/video-enc0:/dev/video-enc0
+
+
+###### Recyclarr ############
+  recyclarr:
+    <<: *common-keys-apps
+    container_name: recyclarr
+    image: ghcr.io/recyclarr/recyclarr:latest
+    user: 1000:1000
+    environment:
+      #- PUID=1000
+      #- PGID=1000
+      - TZ=Asia/Kolkata
+      - RECYCLARR_CREATE_CONFIG=true
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /home/ubuntu/docker/appdata/arr/recyclarr:/config
+
+
+###### Plex ############
+  plex:
+    <<: *common-keys-host
+    image: linuxserver/plex
+    container_name: plex
+    environment:
+      - PUID=$PUID
+      - PGID=$PGID
+      - TZ=$TZ
+      - VERSION=docker
+      - PLEX_CLAIM=claim-yrYEmwU6DVCS8_JJy-Jz
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - $APPDATADIR/arr/plex-media:/config
+      - $APPDATADIR/arr/plex-media/transcode:/transcode
+      - /data/media:/data/media
+
+  plextraktsync:
+    image: ghcr.io/taxel/plextraktsync:latest
+    depends_on:
+      - plex
+    container_name: plextraktsync
+    command: sync
+    restart: on-failure:5
+    volumes:
+      - /home/ubuntu/docker/appdata/arr/plextraktsync:/app/config
+      - /home/ubuntu/docker/appdata/plextraktsync:/app/xdg
+    environment:
+      - TZ=Asia/Kolkata
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+    networks:
+      - arr
+
+ ###### Flaresolverr ############
+  flaresolverr:
+    <<: *common-keys-vpn
+    container_name: flaresolverr
+    image: flaresolverr/flaresolverr
+    environment:
+      - LOG_LEVEL=info
+      - LOG_HTML=false
+      - CAPTCHA_SOLVER=none
+      - TZ=$TZ
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - $APPDATADIR/arr/flaresolverr:/config
+
+###### TDARR #######
+  tdarr:
+    <<: *common-keys-sonarr_radarr
+    container_name: tdarr
+    image: haveagitgat/tdarr:latest
+    ports:
+      - target: 8265  #webUI port
+        published: 8265
+        protocol: tcp
+        mode: host
+      - target: 8266 # server port
+        published: 8266
+        protocol: tcp
+        mode: host 
+      - target: 8267 # Internal node port
+        published: 8267
+        protocol: tcp
+        mode: host 
+    environment:
+      - PUID=$PUID
+      - PGID=$PGID
+      - TZ=$TZ
+      - serverIP=0.0.0.0
+      - serverPort=8266
+      - webUIPort=8265
+      - internalNode=true
+      - nodeID=OrangePi5
+    volumes:
+      - $APPDATADIR/arr/tdarr/server:/app/server
+      - $APPDATADIR/arr/tdarr/configs:/app/configs
+      - $APPDATADIR/arr/tdarr/logs:/app/logs
+      - /data/media:/data/media
+      - $APPDATADIR/arr/tdarr/transcode_cache:/temp
+    labels:
+      #- diun.enable=true
+      # Watchtower
+      - "com.centurylinklabs.watchtower.enable=true"     
